@@ -8,7 +8,6 @@ date: "2026-03-16"
 
 
 # 1. NALAGANJE POTREBNIH KNJIŽNIC
-# Če jih še nimaš, uporabi install.packages("tidyverse") itd.
 library(readxl)    # Za uvoz Excel datotek
 install.packages("tidyverse")
 library(tidyverse) # Za manipulacijo podatkov in vizualizacijo
@@ -16,8 +15,7 @@ install.packages("lubridate")
 library(lubridate) # Za delo z datumi
 
 # 2. UVOZ PODATKOV
-# Prilagodi uporabniško ime v poti do namizja
-file_path <- "C:/Users/UrbanV/OneDrive - Kmetijski inštitut Slovenije/Namizje/nadkontrola.xlsx"
+file_path <- "C:/Users/.../Namizje/nadkontrola.xlsx"
 data <- read_excel(file_path)
 
 # 3. PREOBLIKOVANJE IN DODELITEV TIPOV PODATKOV

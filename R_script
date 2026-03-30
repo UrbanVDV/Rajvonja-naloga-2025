@@ -1,0 +1,464 @@
+---
+title: "Nadkontrola pri rejah z robotsko molžo"
+output: html_document
+date: "2026-03-16"
+---
+
+```{r}
+
+
+# 1. NALAGANJE POTREBNIH KNJIŽNIC
+# Če jih še nimaš, uporabi install.packages("tidyverse") itd.
+library(readxl)    # Za uvoz Excel datotek
+install.packages("tidyverse")
+library(tidyverse) # Za manipulacijo podatkov in vizualizacijo
+install.packages("lubridate")
+library(lubridate) # Za delo z datumi
+
+# 2. UVOZ PODATKOV
+# Prilagodi uporabniško ime v poti do namizja
+file_path <- "C:/Users/UrbanV/OneDrive - Kmetijski inštitut Slovenije/Namizje/nadkontrola.xlsx"
+data <- read_excel(file_path)
+
+# 3. PREOBLIKOVANJE IN DODELITEV TIPOV PODATKOV
+nadkontrola <- data %>%
+  mutate(
+    # Kategorne spremenljivke (Faktorji)
+    SIFRA_LOKACIJE = as.factor(SIFRA_LOKACIJE),
+    KM_ZIV_ID_SEQ  = as.factor(KM_ZIV_ID_SEQ),
+    KMRM_ID_KRAVE  = as.factor(KMRM_ID_KRAVE),
+    ZAP_TELITEV    = as.factor(ZAP_TELITEV),
+    DEL_DNEVA      = as.factor(DEL_DNEVA),
+    
+    # Datumi in časi
+    DATUM_KONTROLE = dmy(DATUM_KONTROLE),
+
+    # Numerične spremenljivke
+    DIM               = as.numeric(DIM),
+    F_PERCENT_SAMPLE  = as.numeric(F_PERCENT_SAMPLE),
+    MY_0              = as.numeric(MY_0),
+    IM_0              = as.numeric(IM_0),
+    MY_1              = as.numeric(MY_1),
+    IM_1              = as.numeric(IM_1),
+    MY_2              = as.numeric(MY_2),
+    IM_2              = as.numeric(IM_2),
+    MY_3              = as.numeric(MY_3)
+  ) %>%
+  # Odstranimo vrstice, kjer nam manjkajo ključni podatki za model M3
+  filter(!is.na(IM_1), !is.na(MY_1))
+
+# 4. PREGLED STRUKTURE
+glimpse(nadkontrola)
+summary(nadkontrola)
+
+```
+# čiščenje podatkov
+## filtriranje podatkov: interval med molžama
+```{r}
+# 1. FILTRIRANJE: Obdržimo le realne intervale (npr. med 3h in 20h)
+nadkontrola_clean <- nadkontrola %>%
+  filter(IM_0 >= 180 & IM_0 <= 1200) %>% # Intervali med 3 in 20 urami
+  filter(F_PERCENT_SAMPLE > 1.5 & F_PERCENT_SAMPLE < 9.0) # Odstranimo še biološko nerealne maščobe
+
+```
+## filtriranje podatkov: omejitev mlečnosti na en obisk robota
+```{r}
+# Omejimo MY_0 na biološko smiselno mejo (npr. max 35 kg na molžo)
+nadkontrola_clean <- nadkontrola_clean %>%
+  filter(MY_0 > 0.5 & MY_0 < 40)
+
+# Preveriva osnovno statistiko po čiščenju
+summary(nadkontrola_clean$MY_0)
+```
+## Omejitev predhodnega intervala pred molžo (IM_1)
+```{r}
+# 1. POSODOBITEV FILTRA: Omejimo še predhodni interval (IM_1)
+nadkontrola_clean <- nadkontrola_clean %>%
+  filter(IM_1 >= 180 & IM_1 <= 1200)
+```
+
+# korelacijska analiza in vizualizacija
+```{r}
+# 1. IZRAČUN KORELACIJSKE MATRIKE
+# Izberemo le numerične stolpce, ki so pomembni za model M3
+cols_for_corr <- nadkontrola_clean %>%
+  select(F_PERCENT_SAMPLE, MY_0, IM_0, MY_1, IM_1, DIM)
+
+cor_matrix <- cor(cols_for_corr, use = "complete.obs")
+print("Korelacijska matrika:")
+print(round(cor_matrix, 3))
+
+
+
+
+# Izračun korelacij za očiščene podatke
+cor_data <- nadkontrola_clean %>%
+  select(F_PERCENT_SAMPLE, IM_0, MY_0, IM_1, MY_1, DIM)
+
+round(cor(cor_data, use = "complete.obs"), 3)
+
+
+```
+
+# VIZUALIZACIJA: Glavni vpliv intervala na maščobo
+```{r}
+# 2. VIZUALIZACIJA: Glavni vpliv intervala na maščobo
+# Uporabiva metodo "gam",GAM (Generalized Additive Model)
+ggplot(nadkontrola_clean, aes(x = IM_0, y = F_PERCENT_SAMPLE)) +
+  geom_point(alpha = 0.1, color = "darkblue") + # Manjši alpha (0.1) bolje pokaže gostoto
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), color = "red", se = TRUE) + 
+  labs(title = "Povezava med intervalom med molžama in vsebnostjo maščobe v mleku",
+       x = "Interval molže (minute)",
+       y = "Maščoba (%)") +
+  theme_minimal()
+```
+# Vpliv količine mleka na maščobo
+```{r}
+# 3. VIZUALIZACIJA: Vpliv količine mleka na maščobo
+ggplot(nadkontrola_clean, aes(x = MY_0, y = F_PERCENT_SAMPLE)) +
+  geom_point(alpha = 0.4, color = "darkgreen") +
+  geom_smooth(method = "lm", color = "orange") +
+  labs(title = "Povezava med količino mleka in vsebnostjo maščobe",
+       x = "Količina mleka pri molži (kg)",
+       y = "Maščoba (%)") +
+  theme_minimal()
+```
+# ali prejšnji interval (IM_1) vpliva na trenutno maščobo
+```{r}
+# 4. PREVERBA CARRY-OVER UČINKA (Zgodovina)
+# Poglejmo, ali prejšnji interval (IM_1) vpliva na trenutno maščobo
+ggplot(nadkontrola_clean, aes(x = IM_1, y = F_PERCENT_SAMPLE)) +
+  geom_point(alpha = 0.1, color = "purple") +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), color = "red") +
+  labs(title = "Odnos med predhodnim intervalom mollže in vsebnostjo maščob",
+       subtitle = "Realni intervali (180-1200 min) - Carry-over učinek",
+       x = "Predhodni interval (minute)",
+       y = "Trenutna maščoba (%)") +
+  theme_minimal()
+
+```
+# Model vplivov intervalov med molžama, mlečnosti DIm na % maščobe
+```{r}
+# Predlagana koda za naslednji korak:
+install.packages("lme4")
+library(lme4)
+model_final <- lmer(F_PERCENT_SAMPLE ~ IM_0 + MY_0 + IM_1 + MY_1 + DIM + 
+                    (1 | KM_ZIV_ID_SEQ) + (1 | SIFRA_LOKACIJE), 
+                    data = nadkontrola_clean)
+summary(model_final)
+
+```
+# Diagnostika ostankov (Residual Analysis)
+```{r}
+# POŽENI SKRIPTO V ENEM KOSU ČENE NE IZRIŠE TRENTNE ČRTE
+
+# Popravek za Residuals vs Fitted z dodano vodoravno črto
+plot(predict(model_final), residuals(model_final), 
+     col = rgb(0,0,1,0.05), 
+     xlab = "Prilagojene vrednosti", ylab = "Ostanki",
+     main = "Ostanki v odvisnosti od prilagojenih vrednosti")
+abline(h = 0, col = "red", lwd = 2) # Ta doda rdečo vodoravno črto
+
+```
+```{r}
+# POŽENI SKRIPTO V ENEM KOSU ČENE NE IZRIŠE TRENTNE ČRTE
+
+# Popravek za Q-Q plot (zaženi obe vrstici hkrati)
+qqnorm(residuals(model_final))
+qqline(residuals(model_final), col = "red", lwd = 2)
+
+qqnorm(residuals(model_final), 
+       xlab = "Teoretični kvantili", 
+       ylab = "Vzorčni kvantili", 
+       main = "Graf normalnih kvantilov (Q-Q graf)")
+qqline(residuals(model_final), col = "red") # Dodate še referenčno premico
+```
+
+```{r}
+
+# 3. Histogram ostankov
+hist(residuals(model_final), breaks = 50, main = "Porazdelitev ostankov", xlab = "Napaka napovedi")
+
+```
+# 2. Merila kakovosti modela (R2 , RMSE)
+```{r}
+#install.packages("performance")
+library(performance)
+
+r2_results <- model_performance(model_final)
+print(r2_results)
+```
+
+```{r}
+# 3. Izračun povprečne napake napovedi (RMSE)
+rmse_value <- rmse(model_final)
+print(paste("RMSE (povprečna napaka):", round(rmse_value, 3), "% maščobe"))
+
+```
+# Primer nadgradnje modela lokaritmiranje intervalov med molžami:
+
+```{r}
+model_plus <- lmer(F_PERCENT_SAMPLE ~ log(IM_0) + MY_0 + log(IM_1) + MY_1 + 
+                     DIM + I(DIM^2) + ZAP_TELITEV + (1 | KM_ZIV_ID_SEQ), 
+                   data = nadkontrola_clean)
+
+# POŽENI SKRIPTO V ENEM KOSU ČENE NE IZRIŠE TRENTNE ČRTE
+
+# Popravek za Residuals vs Fitted z dodano vodoravno črto
+plot(predict(model_plus), residuals(model_plus), 
+     col = rgb(0,0,1,0.05), 
+     xlab = "Fitted values", ylab = "Ostanki",
+     main = "Residuals vs Fitted")
+abline(h = 0, col = "red", lwd = 2) # Ta doda rdečo vodoravno črto
+
+
+# POŽENI SKRIPTO V ENEM KOSU ČENE NE IZRIŠE TRENTNE ČRTE
+
+# Popravek za Q-Q plot (zaženi obe vrstici hkrati)
+qqnorm(residuals(model_plus))
+qqline(residuals(model_plus), col = "red", lwd = 2)
+
+
+
+# 3. Histogram ostankov
+hist(residuals(model_plus), breaks = 50, main = "Porazdelitev ostankov", xlab = "Napaka napovedi")
+
+# 2. Merila kakovosti modela (R2 , RMSE)
+```{r}
+#install.packages("performance")
+library(performance)
+
+r2_results <- model_performance(model_plus)
+print(r2_results)
+```
+
+```{r}
+# 3. Izračun povprečne napake napovedi (RMSE)
+rmse_value <- rmse(model_plus)
+print(paste("RMSE (povprečna napaka):", round(rmse_value, 3), "% maščobe"))
+
+```
+# Model z interakcijo med intervali molže in mlečnostjo
+```{r}
+# 1. GRADNJA MODELA Z INTERAKCIJAMI
+# log(IM_0) * MY_0 pomeni: vpliv IM_0 + vpliv MY_0 + vpliv njunega prepleta
+model_interaction <- lmer(F_PERCENT_SAMPLE ~ log(IM_0) * MY_0 + log(IM_1) * MY_1 + 
+                          DIM + I(DIM^2) + ZAP_TELITEV + 
+                          (1 | KM_ZIV_ID_SEQ) + (1 | SIFRA_LOKACIJE), 
+                          data = nadkontrola_clean)
+
+# 2. PREVERBA KAKOVOSTI
+library(performance)
+perf_interaction <- model_performance(model_interaction)
+print("Rezultati modela z interakcijami:")
+print(perf_interaction)
+
+# 3. IZRAČUN RMSE
+rmse_inter <- rmse(model_interaction)
+print(paste("RMSE (povprečna napaka):", round(rmse_inter, 3), "% maščobe"))
+
+# 4. PREGLED KOEFICIENTOV (da vidiva, če so interakcije značilne)
+summary(model_interaction)$coefficients
+```
+# Cook-ova razdalja
+```{r}
+# 1. Izračun vpliva (Cookova razdalja) - pri 100k podatkih traja cca 1-2 min
+cooks_d <- cooks.distance(model_interaction)
+
+
+# 2. Odstraniva le 1 % najbolj vplivnih točk (to je znanstveno bolj vzdržno)
+meja_1_procent <- quantile(cooks_d, 0.99, na.rm = TRUE)
+influential_obs <- which(cooks_d > meja_1_procent)
+
+# 3. Ustvariš nov nabor (izgubil boš le 1 % podatkov, ne 88 %)
+nadkontrola_ultra <- nadkontrola_clean[-influential_obs, ]
+
+# Preveri število vrstic - zdaj bi jih moralo biti okoli 96.900
+nrow(nadkontrola_ultra)
+
+# 4. Ponovni zagon modela
+model_ultra <- lmer(F_PERCENT_SAMPLE ~ log(IM_0) * MY_0 + log(IM_1) * MY_1 + 
+                    DIM + I(DIM^2) + ZAP_TELITEV + 
+                    (1 | KM_ZIV_ID_SEQ) + (1 | SIFRA_LOKACIJE), 
+                    data = nadkontrola_ultra)
+
+# 5. Poglej rezultate
+model_performance(model_ultra)
+summary(model_ultra)
+
+```
+# končni model z interakcijami in logaritmiranimi intervali med molžama
+```{r}
+# 1. Standardizacija numeričnih spremenljivk
+# scale() centrira podatke okoli 0, kar reši numerično nestabilnost
+nadkontrola_ultra <- nadkontrola_ultra %>%
+  mutate(
+    MY_0_s = as.numeric(scale(MY_0)),
+    MY_1_s = as.numeric(scale(MY_1)),
+    logIM0_s = as.numeric(scale(log(IM_0))),
+    logIM1_s = as.numeric(scale(log(IM_1))),
+    DIM_s = as.numeric(scale(DIM)),
+    DIM2_s = as.numeric(scale(DIM^2))
+  )
+
+# 2. Finalni model (uporabimo standardizirane verzije)
+model_final_scaled <- lmer(F_PERCENT_SAMPLE ~ logIM0_s * MY_0_s + logIM1_s * MY_1_s + 
+                           DIM_s + DIM2_s + ZAP_TELITEV + 
+                           (1 | KM_ZIV_ID_SEQ) + (1 | SIFRA_LOKACIJE), 
+                           data = nadkontrola_ultra)
+
+# 3. Preveri, če je opozorilo izginilo in poglej rezultate
+summary(model_final_scaled)
+model_performance(model_final_scaled)
+
+```
+
+```{r}
+# Popravek za Residuals vs Fitted z dodano vodoravno črto
+plot(predict(model_final_scaled), residuals(model_final_scaled), 
+     col = rgb(0,0,1,0.05), 
+     xlab = "Fitted values", ylab = "Ostanki",
+     main = "Residuals vs Fitted")
+abline(h = 0, col = "red", lwd = 2) # Ta doda rdečo vodoravno črto
+
+
+# POŽENI SKRIPTO V ENEM KOSU ČENE NE IZRIŠE TRENTNE ČRTE
+
+# Popravek za Q-Q plot (zaženi obe vrstici hkrati)
+qqnorm(residuals(model_final_scaled))
+qqline(residuals(model_final_scaled), col = "red", lwd = 2)
+
+
+
+# 3. Histogram ostankov
+hist(residuals(model_final_scaled), breaks = 50, main = "Porazdelitev ostankov", xlab = "Napaka napovedi")
+
+# 2. Merila kakovosti modela (R2 , RMSE)
+```{r}
+
+
+r2_results <- model_performance(model_final_scaled)
+print(r2_results)
+```
+
+```{r}
+# 3. Izračun povprečne napake napovedi (RMSE)
+rmse_value <- rmse(model_plus)
+print(paste("RMSE (povprečna napaka):", round(rmse_value, 3), "% maščobe"))
+
+```
+
+# izračun korekcijskih faktorjev
+```{r}
+# 1. SHRANJEVANJE PARAMETROV SKALIRANJA (nujno za pravilno napoved)
+# Te vrednosti potrebujemo, da nove podatke "pripravimo" na isti način kot model
+means <- attr(scale(nadkontrola_ultra$MY_0), "scaled:center")
+sds <- attr(scale(nadkontrola_ultra$MY_0), "scaled:scale")
+
+# Funkcija za skaliranje novih vrednosti na podlagi baze
+scale_val <- function(x, original_col) {
+  (x - attr(scale(original_col), "scaled:center")) / attr(scale(original_col), "scaled:scale")
+}
+
+# 2. DEFINICIJA REFERENČNE MOLŽE (Standard: 12 ur)
+# Vzamemo povprečne vrednosti črede za ostale parametre
+ref_IM <- 720
+ref_MY <- mean(nadkontrola_ultra$MY_0)
+ref_DIM <- mean(nadkontrola_ultra$DIM)
+ref_ZAP <- factor("2", levels = levels(nadkontrola_ultra$ZAP_TELITEV))
+
+# 3. GENERIRANJE MREŽE ZA LOOKUP TABELO
+# Ustvarimo različne scenarije intervalov (4h do 16h) in količin (5kg do 30kg)
+grid <- expand.grid(
+  IM_obs = seq(240, 960, by = 60), # od 4h do 16h
+  MY_obs = seq(5, 30, by = 5)      # od 5kg do 30kg
+)
+
+# 4. IZRAČUN KOREKCIJ
+grid_results <- grid %>%
+  mutate(
+    # Skaliranje za model
+    logIM0_s = scale_val(log(IM_obs), log(nadkontrola_ultra$IM_0)),
+    MY_0_s = scale_val(MY_obs, nadkontrola_ultra$MY_0),
+    logIM1_s = scale_val(log(ref_IM), log(nadkontrola_ultra$IM_0)), # predpostavimo ref prejšnjo
+    MY_1_s = scale_val(ref_MY, nadkontrola_ultra$MY_0),
+    DIM_s = scale_val(ref_DIM, nadkontrola_ultra$DIM),
+    DIM2_s = scale_val(ref_DIM^2, nadkontrola_ultra$DIM^2),
+    ZAP_TELITEV = ref_ZAP
+  )
+
+# Napoved za referenco (12h) in za opazovano (grid)
+pred_ref <- predict(model_final_scaled, newdata = grid_results[1,] %>% mutate(logIM0_s = scale_val(log(720), log(nadkontrola_ultra$IM_0)), MY_0_s = scale_val(ref_MY, nadkontrola_ultra$MY_0)), re.form = NA)
+grid$pred_obs <- predict(model_final_scaled, newdata = grid_results, re.form = NA)
+
+# Izračun končnega faktorja
+grid$CF <- round(pred_ref - grid$pred_obs, 3)
+
+# 5. VIZUALIZACIJA (Heatmap)
+library(ggplot2)
+ggplot(grid, aes(x = IM_obs/60, y = MY_obs, fill = CF)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "red", mid = "white", high = "blue", midpoint = 0) +
+  geom_text(aes(label = CF), size = 3) +
+  labs(title = "Korekcijski faktorji za napoved vsebnosti maščobe (%) na osnovi enega vzorčenja",
+       subtitle = "Referenca: 12-urni interval",
+       x = "Interval molže (ure)",
+       y = "Količina mleka pri molži (kg)",
+       fill = "Popravek (+/- %)") +
+  theme_minimal()
+```
+# validacija korekcijskih faktorjev
+```{r}
+# 1. NAPOVED STANDARDIZIRANE MAŠČOBE
+# Za vsako vrstico izračunamo vrednost, kot da bi bil interval točno 720 min
+nadkontrola_validacija <- nadkontrola_ultra %>%
+  mutate(
+    # Ustvarimo "fiktivne" standardne pogoje za vsako meritev
+    logIM0_ref = scale_val(log(720), log(nadkontrola_ultra$IM_0)),
+    MY0_ref = scale_val(mean(nadkontrola_ultra$MY_0), nadkontrola_ultra$MY_0),
+    logIM1_ref = scale_val(log(720), log(nadkontrola_ultra$IM_0)),
+    MY1_ref = scale_val(mean(nadkontrola_ultra$MY_0), nadkontrola_ultra$MY_0)
+  )
+
+# Izračunamo napovedano standardizirano vrednost (vključno z naključnim vplivom krave)
+nadkontrola_validacija$F_CORRECTED <- predict(model_final_scaled, 
+                                              newdata = nadkontrola_validacija %>% 
+                                                mutate(logIM0_s = logIM0_ref, 
+                                                       MY_0_s = MY0_ref,
+                                                       logIM1_s = logIM1_ref,
+                                                       MY_1_s = MY1_ref))
+
+# 2. PRIMERJAVA VARIABILNOSTI
+stats_raw <- sd(nadkontrola_validacija$F_PERCENT_SAMPLE)
+stats_corr <- sd(nadkontrola_validacija$F_CORRECTED)
+
+print(paste("Standardni odklon (surovi podatki):", round(stats_raw, 4)))
+print(paste("Standardni odklon (popravljeni podatki):", round(stats_corr, 4)))
+print(paste("Zmanjšanje variabilnosti za:", round((1 - stats_corr/stats_raw)*100, 2), "%"))
+
+# 3. VIZUALNA VALIDACIJA (Ključni graf za članek)
+library(tidyr)
+plot_data <- nadkontrola_validacija %>%
+  select(IM_0, F_PERCENT_SAMPLE, F_CORRECTED) %>%
+  pivot_longer(cols = c(F_PERCENT_SAMPLE, F_CORRECTED), 
+               names_to = "Tip", values_to = "Mascoba")
+
+ggplot(plot_data, aes(x = IM_0, y = Mascoba, color = Tip)) +
+  geom_smooth(method = "gam", se = FALSE) +
+  scale_color_manual(values = c("F_CORRECTED" = "blue", "F_PERCENT_SAMPLE" = "red"),
+                     labels = c("Popravljena (Standard 12h)", "Surova meritev")) +
+  labs(title = "Učinek korekcije na vpliv intervala",
+       x = "Interval molže (minute)",
+       y = "Vsebnost maščobe (%)") +
+  theme_minimal()
+
+```
+```{r}
+# Izračun korelacije
+cor_raw <- cor(nadkontrola_validacija$IM_0, nadkontrola_validacija$F_PERCENT_SAMPLE)
+cor_corr <- cor(nadkontrola_validacija$IM_0, nadkontrola_validacija$F_CORRECTED)
+
+print(paste("Korelacija (surovi):", round(cor_raw, 3)))
+print(paste("Korelacija (popravljeni):", round(cor_corr, 3)))
+```
+
